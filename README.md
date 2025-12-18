@@ -1,6 +1,6 @@
 # Employee Arrival Greetings
 
-[![Employee Arrival Greetings Banner](images/n8n_unifi.png)](images/n8n_unifi.png)
+[![Employee Arrival Greetings Banner](images/n8n_unifi_low.png)](images/n8n_unifi.png)
 
 [![n8n](https://img.shields.io/badge/n8n-workflow-FF6D5A?logo=n8n&logoColor=white)](https://n8n.io)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
