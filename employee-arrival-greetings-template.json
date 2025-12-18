@@ -1,0 +1,351 @@
+{
+  "name": "Employee Arrival Greetings",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [-1152, -96],
+      "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_UNIFI_CONTROLLER_IP/proxy/network/integration/v1/sites/YOUR_SITE_ID/clients?limit=200",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-KEY",
+              "value": "YOUR_UNIFI_API_KEY"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "get-wifi-clients",
+      "name": "Get WiFi Clients",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [-944, -96],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.contact_id, c.first_name, c.last_name, c.phone, c.employee_mac, pg.last_greeted FROM contacts c LEFT JOIN presence_greetings pg ON c.contact_id = pg.contact_id WHERE c.is_employee = TRUE AND c.employee_mac IS NOT NULL AND c.phone IS NOT NULL;",
+        "options": {}
+      },
+      "id": "get-employees",
+      "name": "Get Employees with MACs",
+      "type": "n8n-nodes-base.postgres",
+      "position": [-752, -96],
+      "typeVersion": 2.5
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get connected MACs from UniFi\nconst wifiClients = $('Get WiFi Clients').first().json.data || [];\nconst connectedMacs = new Set(wifiClients.map(c => c.macAddress?.toLowerCase()));\n\n// Get employees\nconst employees = $('Get Employees with MACs').all();\n\n// Get current date and time (Pacific Time) - CHANGE TIMEZONE AS NEEDED\nconst now = new Date();\nconst pacificOptions = { timeZone: 'America/Los_Angeles' };\nconst pacificDate = now.toLocaleDateString('en-CA', pacificOptions);\nconst currentHour = parseInt(now.toLocaleTimeString('en-US', { ...pacificOptions, hour: 'numeric', hour12: false }));\nconst dayOfWeek = now.toLocaleDateString('en-US', { ...pacificOptions, weekday: 'long' });\n\n// Determine greeting based on time\nlet timeOfDay;\nif (currentHour >= 5 && currentHour < 12) {\n  timeOfDay = \"morning\";\n} else if (currentHour >= 12 && currentHour < 17) {\n  timeOfDay = \"afternoon\";\n} else {\n  timeOfDay = \"evening\";\n}\n\n// Find employees to greet\nconst toGreet = [];\n\nfor (const emp of employees) {\n  const mac = emp.json.employee_mac?.toLowerCase();\n  const lastGreeted = emp.json.last_greeted;\n  \n  if (mac && connectedMacs.has(mac)) {\n    let lastGreetedPacific = null;\n    if (lastGreeted) {\n      const greetedDate = new Date(lastGreeted);\n      lastGreetedPacific = greetedDate.toLocaleDateString('en-CA', pacificOptions);\n    }\n    \n    if (lastGreetedPacific !== pacificDate) {\n      toGreet.push({\n        json: {\n          contact_id: emp.json.contact_id,\n          first_name: emp.json.first_name,\n          last_name: emp.json.last_name,\n          phone: emp.json.phone,\n          employee_mac: mac,\n          today: pacificDate,\n          timeOfDay: timeOfDay,\n          dayOfWeek: dayOfWeek\n        }\n      });\n    }\n  }\n}\n\nreturn toGreet;"
+      },
+      "id": "find-arrivals",
+      "name": "Find New Arrivals",
+      "type": "n8n-nodes-base.code",
+      "position": [-544, -96],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-arrivals",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              },
+              "leftValue": "={{ $json.contact_id }}",
+              "rightValue": 0
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-arrivals",
+      "name": "Has Arrivals?",
+      "type": "n8n-nodes-base.if",
+      "position": [-352, -96],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-arrivals",
+      "name": "Loop Over Arrivals",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [-1152, 208],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT greeting_text FROM greeting_history WHERE contact_id = {{ $json.contact_id }} ORDER BY sent_at DESC LIMIT 10;",
+        "options": {}
+      },
+      "id": "get-recent-greetings",
+      "name": "Get Recent Greetings",
+      "type": "n8n-nodes-base.postgres",
+      "position": [-912, 208],
+      "typeVersion": 2.5,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the current employee from the loop\nconst employee = $('Loop Over Arrivals').first().json;\n\n// Get past greetings\nconst pastGreetings = $('Get Recent Greetings').all()\n  .map(g => g.json.greeting_text)\n  .filter(t => t)\n  .map(t => '- ' + t)\n  .join('\\n') || '(None)';\n\nreturn [{\n  json: {\n    ...employee,\n    pastGreetings: pastGreetings\n  }\n}];"
+      },
+      "id": "prepare-context",
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "position": [-704, 208],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are writing a heartfelt arrival greeting on behalf of YOUR_COMPANY_NAME to one of our cherished team members, {{ $json.first_name }}.\n\n**Context:**\n- Day: {{ $json.dayOfWeek }}\n- Time: {{ $json.timeOfDay }}\n- Past Greetings (DO NOT repeat these): \n{{ $json.pastGreetings }}\n\n**Our Philosophy:**\nOur employees are family. They chose to be here, and we are grateful every single day for their dedication, talent, and heart. This greeting should make {{ $json.first_name }} feel genuinely valued - like walking through the door and being greeted by someone who truly cares about them.\n\n**What We Want {{ $json.first_name }} to Feel:**\n- Appreciated and seen as an individual, not just a worker\n- Glad they work here\n- Energized and uplifted to start their day\n- Like they matter and their presence makes a difference\n\n**Tone:**\n- Warm and genuine (like a heartfelt note from someone who cares)\n- Uplifting and positive (brighten their day)\n- Personal and human (not corporate or robotic)\n- Motivational without being preachy\n\n**Day Awareness:**\n- Monday: Fresh start energy, new possibilities\n- Friday: Celebrate making it through, weekend ahead\n- Mid-week: Acknowledge their momentum and effort\n\n**Rules:**\n1. Start with: \"Good {{ $json.timeOfDay }}, {{ $json.first_name }}!\"\n2. Follow with 1-2 SHORT sentences that are warm, uplifting, and make them feel valued\n3. Max 155 characters total (SMS limit)\n4. ONE emoji at the end is encouraged\n5. Make it feel personal and heartfelt, not generic\n\n**Examples of the RIGHT tone:**\n- \"Good morning, Sarah! Your energy lights up this place. So glad you're here today! ☀️\"\n- \"Good afternoon, Mike! We're lucky to have you on the team. Thanks for all you do! 🙌\"\n- \"Good morning, Jessica! Happy Friday - you've earned it. Enjoy the finish line! 🎉\"\n- \"Good morning, Tom! New week, fresh start, and you're already making it better just by being here! 💪\"\n- \"Good afternoon, Drew! The team is stronger with you in it. Thanks for showing up! ⭐\"\n\nGenerate ONLY the message text.",
+        "options": {}
+      },
+      "id": "generate-greeting",
+      "name": "Generate Greeting",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [-512, 208],
+      "typeVersion": 1.4
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-4-20250514",
+          "mode": "list",
+          "cachedResultName": "Claude Sonnet 4"
+        },
+        "options": {
+          "maxTokensToSample": 100,
+          "temperature": 0.9
+        }
+      },
+      "id": "anthropic-model",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [-512, 400],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "from": "YOUR_TWILIO_PHONE_NUMBER",
+        "to": "={{ $('Prepare Context').first().json.phone }}",
+        "message": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "send-greeting",
+      "name": "Send Greeting SMS",
+      "type": "n8n-nodes-base.twilio",
+      "position": [-144, 208],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO greeting_history (contact_id, greeting_text) VALUES ({{ $('Prepare Context').first().json.contact_id }}, '{{ $('Generate Greeting').first().json.text.replace(/'/g, \"''\") }}');",
+        "options": {}
+      },
+      "id": "save-greeting-history",
+      "name": "Save Greeting History",
+      "type": "n8n-nodes-base.postgres",
+      "position": [64, 208],
+      "typeVersion": 2.5
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO presence_greetings (contact_id, last_greeted, last_seen_at, first_seen_today) \nVALUES ({{ $('Prepare Context').first().json.contact_id }}, '{{ $('Prepare Context').first().json.today }}', NOW(), NOW()) \nON CONFLICT (contact_id) DO UPDATE SET \n  last_greeted = '{{ $('Prepare Context').first().json.today }}', \n  last_seen_at = NOW(),\n  first_seen_today = CASE \n    WHEN presence_greetings.last_greeted < '{{ $('Prepare Context').first().json.today }}' THEN NOW()\n    ELSE presence_greetings.first_seen_today \n  END;",
+        "options": {}
+      },
+      "id": "mark-as-greeted",
+      "name": "Mark as Greeted",
+      "type": "n8n-nodes-base.postgres",
+      "position": [320, 208],
+      "typeVersion": 2.5
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get WiFi Clients",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get WiFi Clients": {
+      "main": [
+        [
+          {
+            "node": "Get Employees with MACs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Employees with MACs": {
+      "main": [
+        [
+          {
+            "node": "Find New Arrivals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find New Arrivals": {
+      "main": [
+        [
+          {
+            "node": "Has Arrivals?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Arrivals?": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Arrivals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Arrivals": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Get Recent Greetings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Recent Greetings": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Greeting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Greeting": {
+      "main": [
+        [
+          {
+            "node": "Send Greeting SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Greeting SMS": {
+      "main": [
+        [
+          {
+            "node": "Save Greeting History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Greeting History": {
+      "main": [
+        [
+          {
+            "node": "Mark as Greeted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Greeted": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Arrivals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Greeting",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
