@@ -8,8 +8,8 @@
 [![UniFi](https://img.shields.io/badge/UniFi-Network_API-0559C9?logo=ubiquiti&logoColor=white)](https://ui.com)
 [![Twilio](https://img.shields.io/badge/Twilio-SMS-F22F46?logo=twilio&logoColor=white)](https://twilio.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0-blue.svg)]()
-[![Release](https://img.shields.io/badge/Release-December%2018%2C%202025-orange.svg)]()
+[![Version](https://img.shields.io/badge/Version-1.1.0-blue.svg)]()
+[![Release](https://img.shields.io/badge/Release-December%2030%2C%202025-orange.svg)]()
 
 > ### *"People will forget what you said, people will forget what you did, but people will never forget how you made them feel."* — Maya Angelou
 
@@ -44,6 +44,7 @@ The entire system runs as an n8n workflow with PostgreSQL storage, designed for 
 - [Employee Setup](#-employee-setup)
 - [Customization](#-customization)
 - [Useful Commands](#-useful-commands)
+- [SMS Opt-Out Management](#-sms-opt-out-management)
 - [Troubleshooting](#-troubleshooting)
 - [License](#-license)
 - [Special Thanks](#-special-thanks)
@@ -73,6 +74,13 @@ The entire system runs as an n8n workflow with PostgreSQL storage, designed for 
 - **Character Limited** — Stays under 155 characters for SMS compatibility
 - **Emoji Support** — Includes one tasteful emoji at the end for personality
 
+### SMS Opt-Out Management
+
+- **Automatic Opt-Out Detection** — Detects Twilio error 21610 (unsubscribed recipient) and automatically flags users
+- **Database Opt-Out Field** — `sms_opt_out` field in contacts table for manual management
+- **Pre-Send Filtering** — Opted-out users are excluded before SMS sending, preventing errors
+- **Easy Re-Enablement** — Simple SQL command to re-enable SMS for users who want to opt back in
+
 ### Operational Excellence
 
 - **Scheduled Automation** — Runs automatically every 5 minutes with zero intervention
@@ -80,6 +88,7 @@ The entire system runs as an n8n workflow with PostgreSQL storage, designed for 
 - **Daily Reset** — Greeting tracking resets automatically at midnight each day
 - **Timezone Support** — Fully configurable timezone (default: America/Los_Angeles)
 - **Graceful Handling** — Empty batches and edge cases handled without workflow failures
+- **Error Recovery** — Continues processing remaining employees even if one SMS fails
 
 ---
 
@@ -164,22 +173,33 @@ flowchart TB
         MARK["Mark as Greeted<br/>(Update presence_greetings<br/>+ first_seen_today)"]
     end
 
+    subgraph ERROR["⚠️ ERROR HANDLING PHASE"]
+        ERR["Handle SMS Error<br/>(Code Node)"]
+        OPTCHK{"Is Opt-Out<br/>Error?"}
+        FLAG["Flag as Opted Out<br/>(Update sms_opt_out)"]
+    end
+
     T1 --> WIFI
     WIFI --> EMP
     EMP --> FIND
     FIND --> CHECK
-    
+
     CHECK -->|"No arrivals"| END1(["End"])
     CHECK -->|"Has arrivals"| BATCH
-    
+
     BATCH -->|"Done (all processed)"| END2(["End"])
     BATCH -->|"Loop (next person)"| HIST
-    
+
     HIST --> CTX
     CTX --> GEN
     MODEL -.->|"ai_languageModel"| GEN
     GEN --> SMS
-    SMS --> SAVE
+    SMS -->|"Success"| SAVE
+    SMS -->|"Error"| ERR
+    ERR --> OPTCHK
+    OPTCHK -->|"Yes (21610)"| FLAG
+    OPTCHK -->|"No"| BATCH
+    FLAG --> BATCH
     SAVE --> MARK
     MARK -->|"Loop back"| BATCH
 
@@ -188,6 +208,8 @@ flowchart TB
     style SMS fill:#F22F46,color:#fff
     style FIND fill:#FF9800,color:#fff
     style BATCH fill:#2196F3,color:#fff
+    style ERR fill:#FF5722,color:#fff
+    style FLAG fill:#E91E63,color:#fff
 ```
 
 ### Node Details
@@ -204,7 +226,10 @@ flowchart TB
 | **Prepare Context** | Code | Merges employee data with greeting history |
 | **Generate Greeting** | LLM Chain | Sends prompt to Claude for message generation |
 | **Anthropic Chat Model** | AI Model | Claude Sonnet 4 with temperature 0.9 |
-| **Send Greeting SMS** | Twilio | Delivers message via SMS |
+| **Send Greeting SMS** | Twilio | Delivers message via SMS (with error output) |
+| **Handle SMS Error** | Code | Checks for Twilio error 21610 (opt-out) |
+| **Is Opt-Out Error?** | IF | Routes based on error type |
+| **Flag as Opted Out** | PostgreSQL | Sets sms_opt_out = TRUE for the contact |
 | **Save Greeting History** | PostgreSQL | Stores message for future reference |
 | **Mark as Greeted** | PostgreSQL | Updates presence tracking with first_seen_today |
 
@@ -273,12 +298,15 @@ docker exec -it n8n_postgres psql -U n8n -c "CREATE DATABASE your_database;"
 docker exec -i n8n_postgres psql -U n8n -d your_database < employee-arrival-greetings-schema.sql
 ```
 
-### Step 3: Import the Workflow
+### Step 3: Import the Workflows
 
 1. Open n8n at `https://your-domain.com`
 2. Go to **Workflows** → **Import from File**
 3. Select `employee-arrival-greetings-template.json`
 4. Click **Save**
+5. Import the error workflow: **Workflows** → **Import from File** → `handle-sms-opt-out-errors-template.json`
+6. Configure PostgreSQL credentials on both workflows
+7. Link the error workflow: Open main workflow → **Settings** → **Error Workflow** → Select "Handle SMS Opt-Out Errors"
 
 ### Step 4: Configure Placeholders
 
@@ -329,15 +357,19 @@ CREATE TABLE IF NOT EXISTS contacts (
     notes TEXT,
     is_employee BOOLEAN DEFAULT FALSE,
     employee_mac VARCHAR(17),  -- Format: xx:xx:xx:xx:xx:xx
+    sms_opt_out BOOLEAN DEFAULT FALSE,  -- TRUE if user has opted out of SMS
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_contacts_employee 
+CREATE INDEX IF NOT EXISTS idx_contacts_employee
 ON contacts(is_employee) WHERE is_employee = TRUE;
 
-CREATE INDEX IF NOT EXISTS idx_contacts_mac 
+CREATE INDEX IF NOT EXISTS idx_contacts_mac
 ON contacts(employee_mac) WHERE employee_mac IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_contacts_sms_opt_out
+ON contacts(sms_opt_out) WHERE sms_opt_out = TRUE;
 ```
 
 #### presence_greetings
@@ -576,6 +608,98 @@ docker exec n8n_postgres pg_dump -U n8n your_database > backup_$(date +%Y%m%d).s
 
 ---
 
+## 📵 SMS Opt-Out Management
+
+---
+
+[![Employee Arrival Greetings Screenshot](images/unifi_employee_sms_opt_out_screenshot.png)](images/unifi_employee_sms_opt_out_screenshot.png)
+
+---
+
+The system automatically handles SMS opt-outs to prevent errors and respect user preferences.
+
+### How It Works
+
+1. **Pre-Send Filtering** — The workflow excludes users with `sms_opt_out = TRUE` before attempting to send SMS
+2. **Presence Tracking Continues** — Opted-out users still have their `first_seen_today` and `last_seen_at` tracked—they just don't receive SMS
+3. **Automatic Detection** — When Twilio returns error 21610 ("Attempt to send to unsubscribed recipient"), the error workflow automatically flags the user
+4. **Graceful Recovery** — After flagging, the workflow continues processing remaining employees
+
+### Error Workflow Setup
+
+The system includes a separate **Error Workflow** (`handle-sms-opt-out-errors-template.json`) that catches Twilio 21610 errors and automatically flags users as opted out.
+
+#### Importing the Error Workflow
+
+1. In n8n, go to **Workflows** → **Import from File**
+2. Select `handle-sms-opt-out-errors-template.json`
+3. Configure the **PostgreSQL** credential on the "Flag as Opted Out" node
+4. **Save** and **Activate** the workflow
+
+#### Linking to Main Workflow
+
+1. Open your main **Employee Arrival Greetings** workflow
+2. Go to **Settings** (gear icon in top right)
+3. Under **Error Workflow**, select **Handle SMS Opt-Out Errors**
+4. Save the workflow
+
+Now when the main workflow encounters a Twilio 21610 error, it will trigger the error workflow which will:
+- Extract the contact information from the failed execution
+- Check if it's an opt-out error (code 21610)
+- Update the database to set `sms_opt_out = TRUE` for that contact
+
+### View Opted-Out Employees
+
+```bash
+docker exec n8n_postgres psql -U n8n -d your_database -c "
+SELECT contact_id, first_name, last_name, phone, updated_at
+FROM contacts
+WHERE is_employee = TRUE AND sms_opt_out = TRUE
+ORDER BY updated_at DESC;
+"
+```
+
+### Manually Opt-Out an Employee
+
+```bash
+# By contact_id
+docker exec n8n_postgres psql -U n8n -d your_database -c \
+  "UPDATE contacts SET sms_opt_out = TRUE, updated_at = NOW() WHERE contact_id = 30;"
+
+# By phone number
+docker exec n8n_postgres psql -U n8n -d your_database -c \
+  "UPDATE contacts SET sms_opt_out = TRUE, updated_at = NOW() WHERE phone = '7605551234';"
+```
+
+### Re-Enable SMS for an Employee
+
+If an employee wants to receive greetings again after opting back in via Twilio (texting START):
+
+```bash
+docker exec n8n_postgres psql -U n8n -d your_database -c \
+  "UPDATE contacts SET sms_opt_out = FALSE, updated_at = NOW() WHERE contact_id = 30;"
+```
+
+### Twilio Opt-Out Keywords
+
+Twilio automatically manages opt-outs when users text these keywords to your number:
+
+| Keyword | Action |
+|---------|--------|
+| **STOP** | Opts out of all messages |
+| **STOPALL** | Opts out of all messages |
+| **UNSUBSCRIBE** | Opts out of all messages |
+| **CANCEL** | Opts out of all messages |
+| **END** | Opts out of all messages |
+| **QUIT** | Opts out of all messages |
+| **START** | Opts back in to receive messages |
+| **YES** | Opts back in to receive messages |
+| **UNSTOP** | Opts back in to receive messages |
+
+> **Note:** When a user texts START to opt back in, you'll need to manually update the database to set `sms_opt_out = FALSE` for that contact.
+
+---
+
 ## 🔧 Troubleshooting
 
 ### Greetings Not Sending
@@ -603,6 +727,15 @@ docker exec n8n_postgres pg_dump -U n8n your_database > backup_$(date +%Y%m%d).s
 | Empty response | Check Anthropic API key and available credits |
 | Timeout errors | Reduce prompt length or increase node timeout |
 | Repeated messages | Verify greeting_history table is storing correctly |
+
+### SMS Opt-Out Issues
+
+| Issue | Solution |
+|-------|----------|
+| Error 21610 persists | Run the opt-out query to flag the user in database |
+| Employee stopped receiving | Check if `sms_opt_out = TRUE` in contacts table |
+| User opted back in but no SMS | Set `sms_opt_out = FALSE` manually in database |
+| Workflow stops on SMS error | Ensure `onError: continueErrorOutput` is set on Twilio node |
 
 ### Wrong Arrival Times
 

@@ -1,3 +1,7 @@
+-- noinspection SqlDialectInspectionForFile
+
+-- noinspection SqlNoDataSourceInspectionForFile
+
 -- ============================================================================
 -- Employee Arrival Greetings - Database Schema
 -- ============================================================================
@@ -24,6 +28,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     notes TEXT,
     is_employee BOOLEAN DEFAULT FALSE,
     employee_mac VARCHAR(17),  -- WiFi MAC address format: xx:xx:xx:xx:xx:xx
+    sms_opt_out BOOLEAN DEFAULT FALSE,  -- TRUE if user has opted out of SMS notifications
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -31,16 +36,22 @@ CREATE TABLE IF NOT EXISTS contacts (
 -- If contacts table already exists, add the employee columns:
 -- ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_employee BOOLEAN DEFAULT FALSE;
 -- ALTER TABLE contacts ADD COLUMN IF NOT EXISTS employee_mac VARCHAR(17);
+-- ALTER TABLE contacts ADD COLUMN IF NOT EXISTS sms_opt_out BOOLEAN DEFAULT FALSE;
 
 -- Index for quick employee lookups
-CREATE INDEX IF NOT EXISTS idx_contacts_employee 
-ON contacts(is_employee) 
+CREATE INDEX IF NOT EXISTS idx_contacts_employee
+ON contacts(is_employee)
 WHERE is_employee = TRUE;
 
 -- Index for MAC address lookups
-CREATE INDEX IF NOT EXISTS idx_contacts_mac 
-ON contacts(employee_mac) 
+CREATE INDEX IF NOT EXISTS idx_contacts_mac
+ON contacts(employee_mac)
 WHERE employee_mac IS NOT NULL;
+
+-- Index for SMS opt-out filtering (quickly exclude opted-out users)
+CREATE INDEX IF NOT EXISTS idx_contacts_sms_opt_out
+ON contacts(sms_opt_out)
+WHERE sms_opt_out = TRUE;
 
 
 -- ============================================================================
@@ -56,7 +67,7 @@ CREATE TABLE IF NOT EXISTS presence_greetings (
 );
 
 -- Index for date-based queries
-CREATE INDEX IF NOT EXISTS idx_presence_greetings_date 
+CREATE INDEX IF NOT EXISTS idx_presence_greetings_date
 ON presence_greetings(last_greeted);
 
 
@@ -73,7 +84,7 @@ CREATE TABLE IF NOT EXISTS greeting_history (
 );
 
 -- Index for quick lookups of recent greetings per contact
-CREATE INDEX IF NOT EXISTS idx_greeting_history_contact 
+CREATE INDEX IF NOT EXISTS idx_greeting_history_contact
 ON greeting_history(contact_id, sent_at DESC);
 
 
@@ -90,20 +101,20 @@ BEGIN
     IF input IS NULL OR input = '' THEN
         RETURN NULL;
     END IF;
-    
+
     -- Strip all non-numeric characters
     digits := regexp_replace(input, '[^0-9]', '', 'g');
-    
+
     -- Remove leading 1 if 11 digits (US country code)
     IF length(digits) = 11 AND digits LIKE '1%' THEN
         digits := substring(digits from 2);
     END IF;
-    
+
     -- Validate: must be at least 10 digits
     IF length(digits) < 10 THEN
         RETURN NULL;
     END IF;
-    
+
     RETURN digits;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
@@ -139,7 +150,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 -- ORDER BY c.first_name, c.last_name;
 
 -- View today's greetings:
--- SELECT 
+-- SELECT
 --     c.first_name,
 --     c.last_name,
 --     gh.greeting_text,
@@ -162,3 +173,23 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 -- Clear all presence data for fresh start:
 -- TRUNCATE presence_greetings;
 -- TRUNCATE greeting_history;
+
+
+-- ============================================================================
+-- SMS OPT-OUT MANAGEMENT
+-- ============================================================================
+
+-- View all employees who have opted out:
+-- SELECT contact_id, first_name, last_name, phone, sms_opt_out, updated_at
+-- FROM contacts
+-- WHERE is_employee = TRUE AND sms_opt_out = TRUE
+-- ORDER BY updated_at DESC;
+
+-- Manually opt-out an employee (replace YOUR_CONTACT_ID):
+-- UPDATE contacts SET sms_opt_out = TRUE, updated_at = NOW() WHERE contact_id = YOUR_CONTACT_ID;
+
+-- Re-enable SMS for an employee who wants to opt back in (replace YOUR_CONTACT_ID):
+-- UPDATE contacts SET sms_opt_out = FALSE, updated_at = NOW() WHERE contact_id = YOUR_CONTACT_ID;
+
+-- Opt-out by phone number:
+-- UPDATE contacts SET sms_opt_out = TRUE, updated_at = NOW() WHERE phone = 'YOUR_PHONE_NUMBER';

@@ -1,0 +1,105 @@
+{
+  "name": "Handle SMS Opt-Out Errors",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "position": [0, 0],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "const execution = $json.execution;\nconst error = execution?.error;\nconst errorStr = JSON.stringify(error || {});\n\n// Check for Twilio 21610 opt-out error\nif (errorStr.includes('21610') || errorStr.includes('unsubscribed')) {\n  // Try to get the phone number from the execution data\n  const runData = execution?.data?.resultData?.runData || {};\n  const prepareContext = runData['Prepare Context'];\n  let phone = null;\n  let contactId = null;\n  let firstName = null;\n  let lastName = null;\n  \n  if (prepareContext && prepareContext[0]?.data?.main?.[0]?.[0]?.json) {\n    const data = prepareContext[0].data.main[0][0].json;\n    phone = data.phone;\n    contactId = data.contact_id;\n    firstName = data.first_name;\n    lastName = data.last_name;\n  }\n  \n  return [{\n    json: {\n      is_opt_out: true,\n      contact_id: contactId,\n      phone: phone,\n      first_name: firstName,\n      last_name: lastName,\n      error_code: 21610\n    }\n  }];\n}\n\nreturn [];"
+      },
+      "id": "check-error",
+      "name": "Check If Opt-Out",
+      "type": "n8n-nodes-base.code",
+      "position": [220, 0],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-contact",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              },
+              "leftValue": "={{ $json.contact_id }}",
+              "rightValue": 0
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-contact",
+      "name": "Has Contact ID?",
+      "type": "n8n-nodes-base.if",
+      "position": [440, 0],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE contacts SET sms_opt_out = TRUE, updated_at = NOW() WHERE contact_id = {{ $json.contact_id }};",
+        "options": {}
+      },
+      "id": "flag-opted-out",
+      "name": "Flag as Opted Out",
+      "type": "n8n-nodes-base.postgres",
+      "position": [660, 0],
+      "typeVersion": 2.5
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Check If Opt-Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Opt-Out": {
+      "main": [
+        [
+          {
+            "node": "Has Contact ID?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Contact ID?": {
+      "main": [
+        [
+          {
+            "node": "Flag as Opted Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
