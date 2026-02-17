@@ -15,7 +15,7 @@
       "id": "schedule-trigger",
       "name": "Every 5 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "position": [-1104, -176],
+      "position": [-1344, -592],
       "typeVersion": 1.2
     },
     {
@@ -41,7 +41,33 @@
       "id": "get-wifi-clients",
       "name": "Get WiFi Clients",
       "type": "n8n-nodes-base.httpRequest",
-      "position": [-896, -176],
+      "position": [-1136, -592],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "url": "https://YOUR_UNIFI_CONTROLLER/proxy/network/integration/v1/sites/YOUR_SITE_ID/clients?limit=200&offset=200",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-KEY",
+              "value": "YOUR_UNIFI_API_KEY"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "get-wifi-clients-2",
+      "name": "Get WiFi Clients 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [-928, -592],
       "typeVersion": 4.2
     },
     {
@@ -53,27 +79,27 @@
       "id": "get-employees",
       "name": "Get Employees with MACs",
       "type": "n8n-nodes-base.postgres",
-      "position": [-704, -176],
+      "position": [-736, -592],
       "typeVersion": 2.5
     },
     {
       "parameters": {
-        "jsCode": "// Get connected MACs from UniFi\nconst wifiClients = $('Get WiFi Clients').first().json.data || [];\nconst connectedMacs = new Set(wifiClients.map(c => c.macAddress?.toLowerCase()));\n\n// Get employees\nconst employees = $('Get Employees with MACs').all();\n\n// Get current date and time (Pacific Time) - CHANGE TIMEZONE AS NEEDED\nconst now = new Date();\nconst pacificOptions = { timeZone: 'America/Los_Angeles' };\nconst pacificDate = now.toLocaleDateString('en-CA', pacificOptions);\nconst currentHour = parseInt(now.toLocaleTimeString('en-US', { ...pacificOptions, hour: 'numeric', hour12: false }));\nconst dayOfWeek = now.toLocaleDateString('en-US', { ...pacificOptions, weekday: 'long' });\n\n// Determine greeting based on time\nlet timeOfDay;\nif (currentHour >= 5 && currentHour < 12) {\n  timeOfDay = \"morning\";\n} else if (currentHour >= 12 && currentHour < 17) {\n  timeOfDay = \"afternoon\";\n} else {\n  timeOfDay = \"evening\";\n}\n\n// Find all connected employees\nconst results = [];\n\nfor (const emp of employees) {\n  const mac = emp.json.employee_mac?.toLowerCase();\n  const lastGreeted = emp.json.last_greeted;\n  \n  if (mac && connectedMacs.has(mac)) {\n    let lastGreetedPacific = null;\n    if (lastGreeted) {\n      const greetedDate = new Date(lastGreeted);\n      lastGreetedPacific = greetedDate.toLocaleDateString('en-CA', pacificOptions);\n    }\n    \n    results.push({\n      json: {\n        contact_id: emp.json.contact_id,\n        first_name: emp.json.first_name,\n        last_name: emp.json.last_name,\n        phone: emp.json.phone,\n        employee_mac: mac,\n        sms_opt_out: emp.json.sms_opt_out || false,\n        today: pacificDate,\n        timeOfDay: timeOfDay,\n        dayOfWeek: dayOfWeek,\n        already_greeted_today: lastGreetedPacific === pacificDate\n      }\n    });\n  }\n}\n\n// Always return array - return empty placeholder if no results\nif (results.length === 0) {\n  return [{ json: { no_employees: true } }];\n}\n\nreturn results;"
+        "jsCode": "// Get connected MACs from UniFi - merge both pages\nconst page1 = $('Get WiFi Clients').first().json.data || [];\nconst page2 = $('Get WiFi Clients 2').first().json.data || [];\nconst wifiClients = [...page1, ...page2];\nconst connectedMacs = new Set(wifiClients.map(c => c.macAddress?.toLowerCase()));\n\n// Get employees\nconst employees = $('Get Employees with MACs').all();\n\n// Get current date and time (Pacific Time) - CHANGE TIMEZONE AS NEEDED\nconst now = new Date();\nconst pacificOptions = { timeZone: 'America/Los_Angeles' };\nconst pacificDate = now.toLocaleDateString('en-CA', pacificOptions);\nconst currentHour = parseInt(now.toLocaleTimeString('en-US', { ...pacificOptions, hour: 'numeric', hour12: false }));\nconst dayOfWeek = now.toLocaleDateString('en-US', { ...pacificOptions, weekday: 'long' });\n\n// Determine greeting based on time\nlet timeOfDay;\nif (currentHour >= 5 && currentHour < 12) {\n  timeOfDay = \"morning\";\n} else if (currentHour >= 12 && currentHour < 17) {\n  timeOfDay = \"afternoon\";\n} else {\n  timeOfDay = \"evening\";\n}\n\n// Find all connected employees\nconst results = [];\n\nfor (const emp of employees) {\n  const mac = emp.json.employee_mac?.toLowerCase();\n  const lastGreeted = emp.json.last_greeted;\n\n  if (mac && connectedMacs.has(mac)) {\n    let lastGreetedPacific = null;\n    if (lastGreeted) {\n      const greetedDate = new Date(lastGreeted);\n      lastGreetedPacific = greetedDate.toLocaleDateString('en-CA', pacificOptions);\n    }\n\n    results.push({\n      json: {\n        contact_id: emp.json.contact_id,\n        first_name: emp.json.first_name,\n        last_name: emp.json.last_name,\n        phone: emp.json.phone,\n        employee_mac: mac,\n        sms_opt_out: emp.json.sms_opt_out || false,\n        today: pacificDate,\n        timeOfDay: timeOfDay,\n        dayOfWeek: dayOfWeek,\n        already_greeted_today: lastGreetedPacific === pacificDate\n      }\n    });\n  }\n}\n\n// Always return array - return empty placeholder if no results\nif (results.length === 0) {\n  return [{ json: { no_employees: true } }];\n}\n\nreturn results;"
       },
       "id": "find-connected",
       "name": "Find Connected Employees",
       "type": "n8n-nodes-base.code",
-      "position": [-496, -176],
+      "position": [-544, -592],
       "typeVersion": 2
     },
     {
       "parameters": {
         "conditions": {
           "options": {
-            "version": 2,
-            "leftValue": "",
             "caseSensitive": true,
-            "typeValidation": "loose"
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
           },
           "conditions": [
             {
@@ -93,7 +119,7 @@
       "id": "has-connected",
       "name": "Has Connected?",
       "type": "n8n-nodes-base.if",
-      "position": [-280, -176],
+      "position": [-1344, -368],
       "typeVersion": 2.2
     },
     {
@@ -103,7 +129,7 @@
       "id": "loop-employees",
       "name": "Loop Over Employees",
       "type": "n8n-nodes-base.splitInBatches",
-      "position": [-40, -176],
+      "position": [-1136, -368],
       "typeVersion": 3
     },
     {
@@ -133,7 +159,7 @@
       "id": "already-greeted-check",
       "name": "Already Greeted Today?",
       "type": "n8n-nodes-base.if",
-      "position": [180, -176],
+      "position": [-912, -352],
       "typeVersion": 2.2
     },
     {
@@ -145,7 +171,7 @@
       "id": "update-last-seen",
       "name": "Update Last Seen",
       "type": "n8n-nodes-base.postgres",
-      "position": [400, -80],
+      "position": [-672, -368],
       "typeVersion": 2.5
     },
     {
@@ -157,7 +183,7 @@
       "id": "get-recent-greetings",
       "name": "Get Recent Greetings",
       "type": "n8n-nodes-base.postgres",
-      "position": [400, -280],
+      "position": [-1328, -112],
       "typeVersion": 2.5,
       "alwaysOutputData": true
     },
@@ -168,26 +194,27 @@
       "id": "prepare-context",
       "name": "Prepare Context",
       "type": "n8n-nodes-base.code",
-      "position": [620, -280],
+      "position": [-1120, -112],
       "typeVersion": 2
     },
     {
       "parameters": {
         "conditions": {
           "options": {
-            "version": 2,
-            "leftValue": "",
             "caseSensitive": true,
-            "typeValidation": "loose"
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
           },
           "conditions": [
             {
               "id": "not-opted-out",
               "operator": {
                 "type": "boolean",
-                "operation": "false"
+                "operation": "false",
+                "singleValue": true
               },
-              "leftValue": "={{ $json.sms_opt_out }}",
+              "leftValue": "={{ $json.sms_opt_out.toBoolean() }}",
               "rightValue": ""
             }
           ],
@@ -198,7 +225,7 @@
       "id": "sms-allowed",
       "name": "SMS Allowed?",
       "type": "n8n-nodes-base.if",
-      "position": [840, -280],
+      "position": [-912, -112],
       "typeVersion": 2.2
     },
     {
@@ -209,7 +236,7 @@
       "id": "generate-greeting",
       "name": "Generate Greeting",
       "type": "@n8n/n8n-nodes-langchain.chainLlm",
-      "position": [1060, -340],
+      "position": [-704, -128],
       "typeVersion": 1.4
     },
     {
@@ -228,7 +255,7 @@
       "id": "anthropic-model",
       "name": "Anthropic Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
-      "position": [1060, -148],
+      "position": [-704, 144],
       "typeVersion": 1.3
     },
     {
@@ -241,8 +268,9 @@
       "id": "send-sms",
       "name": "Send Greeting SMS",
       "type": "n8n-nodes-base.twilio",
-      "position": [1280, -340],
-      "typeVersion": 1
+      "position": [-352, -128],
+      "typeVersion": 1,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -253,7 +281,7 @@
       "id": "save-greeting-history",
       "name": "Save Greeting History",
       "type": "n8n-nodes-base.postgres",
-      "position": [1500, -340],
+      "position": [-512, 112],
       "typeVersion": 2.5
     },
     {
@@ -265,7 +293,7 @@
       "id": "mark-as-greeted",
       "name": "Mark as Greeted",
       "type": "n8n-nodes-base.postgres",
-      "position": [1720, -340],
+      "position": [-336, 112],
       "typeVersion": 2.5
     },
     {
@@ -277,8 +305,20 @@
       "id": "update-presence-opted-out",
       "name": "Update Presence (Opted Out)",
       "type": "n8n-nodes-base.postgres",
-      "position": [1060, -180],
+      "position": [-1040, 144],
       "typeVersion": 2.5
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE contacts SET sms_opt_out = TRUE, updated_at = NOW()\nWHERE contact_id = {{ $('Prepare Context').first().json.contact_id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-112, -112],
+      "id": "flag-twilio-opt-out",
+      "name": "Flag Twilio Opt-Out"
     }
   ],
   "pinData": {},
@@ -295,6 +335,17 @@
       ]
     },
     "Get WiFi Clients": {
+      "main": [
+        [
+          {
+            "node": "Get WiFi Clients 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get WiFi Clients 2": {
       "main": [
         [
           {
@@ -438,6 +489,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Flag Twilio Opt-Out",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -480,6 +538,17 @@
           {
             "node": "Generate Greeting",
             "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag Twilio Opt-Out": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Employees",
+            "type": "main",
             "index": 0
           }
         ]

@@ -8,8 +8,8 @@
 [![UniFi](https://img.shields.io/badge/UniFi-Network_API-0559C9?logo=ubiquiti&logoColor=white)](https://ui.com)
 [![Twilio](https://img.shields.io/badge/Twilio-SMS-F22F46?logo=twilio&logoColor=white)](https://twilio.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.0-blue.svg)]()
-[![Release](https://img.shields.io/badge/Release-December%2030%2C%202025-orange.svg)]()
+[![Version](https://img.shields.io/badge/Version-1.2.0-blue.svg)]()
+[![Release](https://img.shields.io/badge/Release-February%2017%2C%202026-orange.svg)]()
 
 > ### *"People will forget what you said, people will forget what you did, but people will never forget how you made them feel."* — Maya Angelou
 
@@ -150,9 +150,10 @@ flowchart TB
     end
 
     subgraph DETECTION["📡 PRESENCE DETECTION PHASE"]
-        WIFI["Get WiFi Clients<br/>(UniFi API)"]
+        WIFI["Get WiFi Clients<br/>(UniFi API - Page 1)"]
+        WIFI2["Get WiFi Clients 2<br/>(UniFi API - Page 2)"]
         EMP["Get Employees with MACs<br/>(PostgreSQL Query)"]
-        FIND["Find New Arrivals<br/>(Code Node: Compare MACs,<br/>Filter ungreeted today)"]
+        FIND["Find New Arrivals<br/>(Code Node: Merge pages,<br/>Compare MACs,<br/>Filter ungreeted today)"]
         CHECK{"Has Arrivals?<br/>(contact_id > 0)"}
     end
 
@@ -160,6 +161,7 @@ flowchart TB
         BATCH["Loop Over Arrivals<br/>(Split In Batches, Size: 1)"]
         HIST["Get Recent Greetings<br/>(Last 10 per employee)"]
         CTX["Prepare Context<br/>(Merge employee data +<br/>past greetings)"]
+        SMSCHECK{"SMS Allowed?<br/>(Not opted out)"}
     end
 
     subgraph AI["🤖 AI GENERATION PHASE"]
@@ -171,16 +173,13 @@ flowchart TB
         SMS["Send Greeting SMS<br/>(Twilio Node)"]
         SAVE["Save Greeting History<br/>(PostgreSQL Insert)"]
         MARK["Mark as Greeted<br/>(Update presence_greetings<br/>+ first_seen_today)"]
-    end
-
-    subgraph ERROR["⚠️ ERROR HANDLING PHASE"]
-        ERR["Handle SMS Error<br/>(Code Node)"]
-        OPTCHK{"Is Opt-Out<br/>Error?"}
-        FLAG["Flag as Opted Out<br/>(Update sms_opt_out)"]
+        FLAG["Flag Twilio Opt-Out<br/>(Update sms_opt_out)"]
+        OPTPRES["Update Presence<br/>(Opted Out)"]
     end
 
     T1 --> WIFI
-    WIFI --> EMP
+    WIFI --> WIFI2
+    WIFI2 --> EMP
     EMP --> FIND
     FIND --> CHECK
 
@@ -191,14 +190,14 @@ flowchart TB
     BATCH -->|"Loop (next person)"| HIST
 
     HIST --> CTX
-    CTX --> GEN
+    CTX --> SMSCHECK
+    SMSCHECK -->|"Yes"| GEN
+    SMSCHECK -->|"No (opted out)"| OPTPRES
+    OPTPRES --> BATCH
     MODEL -.->|"ai_languageModel"| GEN
     GEN --> SMS
     SMS -->|"Success"| SAVE
-    SMS -->|"Error"| ERR
-    ERR --> OPTCHK
-    OPTCHK -->|"Yes (21610)"| FLAG
-    OPTCHK -->|"No"| BATCH
+    SMS -->|"Error (21610)"| FLAG
     FLAG --> BATCH
     SAVE --> MARK
     MARK -->|"Loop back"| BATCH
@@ -208,8 +207,8 @@ flowchart TB
     style SMS fill:#F22F46,color:#fff
     style FIND fill:#FF9800,color:#fff
     style BATCH fill:#2196F3,color:#fff
-    style ERR fill:#FF5722,color:#fff
     style FLAG fill:#E91E63,color:#fff
+    style WIFI2 fill:#0559C9,color:#fff
 ```
 
 ### Node Details
@@ -217,21 +216,23 @@ flowchart TB
 | Node | Type | Purpose |
 |------|------|---------|
 | **Every 5 Minutes** | Schedule Trigger | Initiates workflow on configurable interval |
-| **Get WiFi Clients** | HTTP Request | Fetches all connected devices from UniFi API |
+| **Get WiFi Clients** | HTTP Request | Fetches first 200 connected devices from UniFi API |
+| **Get WiFi Clients 2** | HTTP Request | Fetches next 200 devices (offset=200) for pagination |
 | **Get Employees with MACs** | PostgreSQL | Queries employees with registered MAC addresses |
-| **Find New Arrivals** | Code | JavaScript logic to match MACs and filter ungreeted |
-| **Has Arrivals?** | IF | Conditional check to prevent empty processing |
-| **Loop Over Arrivals** | Split In Batches | Processes each employee individually |
+| **Find Connected Employees** | Code | Merges both pages, matches MACs, filters ungreeted |
+| **Has Connected?** | IF | Conditional check to prevent empty processing |
+| **Loop Over Employees** | Split In Batches | Processes each employee individually |
+| **Already Greeted Today?** | IF | Skips employees already greeted today |
 | **Get Recent Greetings** | PostgreSQL | Fetches last 10 greetings for repetition avoidance |
 | **Prepare Context** | Code | Merges employee data with greeting history |
+| **SMS Allowed?** | IF | Checks if employee has opted out of SMS |
 | **Generate Greeting** | LLM Chain | Sends prompt to Claude for message generation |
 | **Anthropic Chat Model** | AI Model | Claude Sonnet 4 with temperature 0.9 |
 | **Send Greeting SMS** | Twilio | Delivers message via SMS (with error output) |
-| **Handle SMS Error** | Code | Checks for Twilio error 21610 (opt-out) |
-| **Is Opt-Out Error?** | IF | Routes based on error type |
-| **Flag as Opted Out** | PostgreSQL | Sets sms_opt_out = TRUE for the contact |
+| **Flag Twilio Opt-Out** | PostgreSQL | Sets sms_opt_out = TRUE when Twilio returns 21610 |
 | **Save Greeting History** | PostgreSQL | Stores message for future reference |
 | **Mark as Greeted** | PostgreSQL | Updates presence tracking with first_seen_today |
+| **Update Presence (Opted Out)** | PostgreSQL | Updates presence for opted-out employees |
 
 ---
 
@@ -298,15 +299,13 @@ docker exec -it n8n_postgres psql -U n8n -c "CREATE DATABASE your_database;"
 docker exec -i n8n_postgres psql -U n8n -d your_database < employee-arrival-greetings-schema.sql
 ```
 
-### Step 3: Import the Workflows
+### Step 3: Import the Workflow
 
 1. Open n8n at `https://your-domain.com`
 2. Go to **Workflows** → **Import from File**
 3. Select `employee-arrival-greetings-template.json`
 4. Click **Save**
-5. Import the error workflow: **Workflows** → **Import from File** → `handle-sms-opt-out-errors-template.json`
-6. Configure PostgreSQL credentials on both workflows
-7. Link the error workflow: Open main workflow → **Settings** → **Error Workflow** → Select "Handle SMS Opt-Out Errors"
+5. Configure PostgreSQL credentials on all Postgres nodes
 
 ### Step 4: Configure Placeholders
 
@@ -314,9 +313,12 @@ Update these values in the workflow:
 
 | Node | Placeholder | Replace With                              |
 |------|-------------|-------------------------------------------|
-| Get WiFi Clients | `YOUR_UNIFI_CONTROLLER_IP` | Your UniFi IP (e.g., `10.200.10.5`)       |
+| Get WiFi Clients | `YOUR_UNIFI_CONTROLLER` | Your UniFi hostname/IP (e.g., `10.200.10.5`)       |
 | Get WiFi Clients | `YOUR_SITE_ID` | Your UniFi site UUID                      |
 | Get WiFi Clients | `YOUR_UNIFI_API_KEY` | Your UniFi API key                        |
+| Get WiFi Clients 2 | `YOUR_UNIFI_CONTROLLER` | Same as Get WiFi Clients       |
+| Get WiFi Clients 2 | `YOUR_SITE_ID` | Same as Get WiFi Clients                      |
+| Get WiFi Clients 2 | `YOUR_UNIFI_API_KEY` | Same as Get WiFi Clients                        |
 | Send Greeting SMS | `YOUR_TWILIO_PHONE_NUMBER` | Your Twilio number (e.g., `+1xxxxxxxxxx`) |
 | Generate Greeting | `YOUR_COMPANY_NAME` | Your company name                         |
 
@@ -620,33 +622,19 @@ The system automatically handles SMS opt-outs to prevent errors and respect user
 
 ### How It Works
 
-1. **Pre-Send Filtering** — The workflow excludes users with `sms_opt_out = TRUE` before attempting to send SMS
+1. **Pre-Send Filtering** — The workflow checks `sms_opt_out` before attempting to send SMS via the "SMS Allowed?" node
 2. **Presence Tracking Continues** — Opted-out users still have their `first_seen_today` and `last_seen_at` tracked—they just don't receive SMS
-3. **Automatic Detection** — When Twilio returns error 21610 ("Attempt to send to unsubscribed recipient"), the error workflow automatically flags the user
+3. **Automatic Detection** — When Twilio returns error 21610 ("Attempt to send to unsubscribed recipient"), the workflow automatically flags the user via the error output
 4. **Graceful Recovery** — After flagging, the workflow continues processing remaining employees
 
-### Error Workflow Setup
+### Inline Error Handling
 
-The system includes a separate **Error Workflow** (`handle-sms-opt-out-errors-template.json`) that catches Twilio 21610 errors and automatically flags users as opted out.
+The workflow handles Twilio opt-out errors inline without requiring a separate error workflow:
 
-#### Importing the Error Workflow
-
-1. In n8n, go to **Workflows** → **Import from File**
-2. Select `handle-sms-opt-out-errors-template.json`
-3. Configure the **PostgreSQL** credential on the "Flag as Opted Out" node
-4. **Save** and **Activate** the workflow
-
-#### Linking to Main Workflow
-
-1. Open your main **Employee Arrival Greetings** workflow
-2. Go to **Settings** (gear icon in top right)
-3. Under **Error Workflow**, select **Handle SMS Opt-Out Errors**
-4. Save the workflow
-
-Now when the main workflow encounters a Twilio 21610 error, it will trigger the error workflow which will:
-- Extract the contact information from the failed execution
-- Check if it's an opt-out error (code 21610)
-- Update the database to set `sms_opt_out = TRUE` for that contact
+1. **Send Greeting SMS** node is configured with `onError: continueErrorOutput`
+2. Success output goes to **Save Greeting History** → **Mark as Greeted**
+3. Error output goes to **Flag Twilio Opt-Out** which sets `sms_opt_out = TRUE`
+4. Both paths loop back to **Loop Over Employees** to continue processing
 
 ### View Opted-Out Employees
 
@@ -732,10 +720,11 @@ Twilio automatically manages opt-outs when users text these keywords to your num
 
 | Issue | Solution |
 |-------|----------|
-| Error 21610 persists | Run the opt-out query to flag the user in database |
+| Error 21610 persists | User should be automatically flagged; check Flag Twilio Opt-Out node |
 | Employee stopped receiving | Check if `sms_opt_out = TRUE` in contacts table |
 | User opted back in but no SMS | Set `sms_opt_out = FALSE` manually in database |
-| Workflow stops on SMS error | Ensure `onError: continueErrorOutput` is set on Twilio node |
+| Workflow stops on SMS error | Verify Send Greeting SMS has `onError: continueErrorOutput` enabled |
+| Opt-out not being flagged | Ensure error output of Send Greeting SMS connects to Flag Twilio Opt-Out |
 
 ### Wrong Arrival Times
 
