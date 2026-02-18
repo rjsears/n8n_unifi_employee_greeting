@@ -51,7 +51,7 @@ The entire system runs as an n8n workflow with PostgreSQL storage, designed for 
 
 ---
 
-## ✨ Features
+## Features
 
 ### WiFi Presence Detection
 
@@ -92,7 +92,7 @@ The entire system runs as an n8n workflow with PostgreSQL storage, designed for 
 
 ---
 
-## 🏗 System Architecture
+## System Architecture
 
 The workflow integrates multiple services to create a seamless employee greeting experience:
 
@@ -139,7 +139,7 @@ flowchart LR
 
 ---
 
-## 📊 Workflow Diagram
+## Workflow Diagram
 
 The workflow follows a structured path from detection through delivery:
 
@@ -236,7 +236,7 @@ flowchart TB
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
@@ -270,7 +270,7 @@ flowchart TB
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Step 1: Deploy n8n Infrastructure
 
@@ -338,7 +338,7 @@ Go to **Settings** → **Credentials** and create:
 
 ---
 
-## 🗄 Database Setup
+## Database Setup
 
 ### Required Tables
 
@@ -408,7 +408,7 @@ ON greeting_history(contact_id, sent_at DESC);
 
 ---
 
-## ⚙️ Workflow Configuration
+##  Workflow Configuration
 
 ### Timezone Configuration
 
@@ -438,7 +438,7 @@ The Anthropic Chat Model is configured with:
 
 ---
 
-## 🔍 Finding Your UniFi Credentials
+## Finding Your UniFi Credentials
 
 ### Site ID
 
@@ -469,7 +469,7 @@ curl -sk -H "X-API-KEY: your_api_key" \
 
 ---
 
-## 👥 Employee Setup
+## Employee Setup
 
 ### Adding Employees
 
@@ -506,7 +506,7 @@ Always use **lowercase with colons**: `aa:bb:cc:dd:ee:ff`
 
 ---
 
-## 🎨 Customization
+## Customization
 
 ### Greeting Tone
 
@@ -541,7 +541,7 @@ The AI generates messages like:
 
 ---
 
-## 🛠 Useful Commands
+## Useful Commands
 
 ### View Employee Greeting Status
 
@@ -610,7 +610,7 @@ docker exec n8n_postgres pg_dump -U n8n your_database > backup_$(date +%Y%m%d).s
 
 ---
 
-## 📵 SMS Opt-Out Management
+## SMS Opt-Out Management
 
 ---
 
@@ -688,7 +688,7 @@ Twilio automatically manages opt-outs when users text these keywords to your num
 
 ---
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Greetings Not Sending
 
@@ -736,7 +736,7 @@ Twilio automatically manages opt-outs when users text these keywords to your num
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
